@@ -1,0 +1,199 @@
+// *********************************************************
+// **************** STATIQUE mode ***************************
+// *********************************************************
+
+// ESC motor for arduino:
+// https://arduino.blaisepascal.fr/controler-un-moteur-brushless/
+
+// hx711:
+// BON ok:
+// https://randomnerdtutorials.com/arduino-load-cell-hx711/
+// https://www.instructables.com/How-to-Interface-HX711-Balance-Module-With-Load-Ce/
+// autre:
+// https://arduino-france.site/capteur-de-poids/
+
+#include <Arduino.h>
+#include <HX711.h>
+#include <Servo.h>
+
+// ESR connecte au ESC FL de la carte
+#define MOTOR_PIN 37
+
+// HX711 circuit wiring
+#define LOADCELL_DOUT_PIN 18
+#define LOADCELL_SCK_PIN 19
+
+HX711 scale;
+Servo motor;
+
+char c = 0; // Serial input key
+unsigned long currentMillis = 0;
+unsigned long startMillis = 0;
+unsigned long elapsedTime, CurTime, previous_Time;
+unsigned long timetochange = 0; // to change the pwm value
+unsigned long previoustimetochange = 0;
+// float scale_factor = -1069.4260;
+float scale_factor = -1051.837406; // newwith motor
+
+long scale_adc = 0;
+long scale_offset = 0;
+// calibration factor = (reading)/(known weight)
+int pwm = 1000;
+float poidsf = 0.0;
+int pwmpercent = 0;
+
+void init_esc_cal(void);
+void init_esc(void);
+
+void setup()
+{
+    Serial.begin(115200);
+    init_esc(); // with calibration for the firdt time
+    delay(500);
+    Serial.println("\nSetup\n");
+    Serial.println("\n-----------------------------------");
+    Serial.println("Starting Setup in STATIC mode");
+    Serial.println("-----------------------------------\n");
+
+    // init ESC
+    // Serial.println("Init ESC sans calib");
+    while (Serial.available()) { // vider le buffer si existe
+        c = Serial.read();
+    }
+
+    Serial.println("Tapez 'C' pour ESC calibration ou 'I' pour continuer");
+    while (!Serial.available()) {
+        delay(1);
+    }
+    c = Serial.read();
+    if (c == 'C') {
+        init_esc_cal(); // with calibration for the firdt time
+    }
+    while (Serial.available() > 0) { // on fini de lire le reste et vider le buffer
+        c = Serial.read();
+    }
+
+    Serial.println("1000");
+    pwm = 1000;
+    motor.writeMicroseconds(pwm);
+    delay(2500);
+
+    // init scale with ampliop X128
+    Serial.println("Init balance");
+    scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+    if (scale.wait_ready_retry(4, 250)) {
+        scale.tare(5); // read and set offset
+    } else {
+        Serial.println("NO HX711 present");
+    }
+    if (scale.wait_ready_retry(4, 250)) {
+        scale.tare(70); // read and set offset
+    } else {
+        Serial.println("NO HX711 pour offset");
+    }
+    scale_offset = scale.get_offset(); //=(ave 70 measures sans offset)/527 grammes
+    scale.set_scale(scale_factor);
+    scale_adc = scale.read_average(5); // read average 5 mesures
+    poidsf = ((float)(scale_adc - scale_offset)) / scale_factor;
+
+    Serial.print("\nScale offset:\t");
+    Serial.print(scale_offset);
+    Serial.print("\tScale Factor:\t");
+    Serial.print(scale_factor);
+    Serial.print("\tScale ADC no offset:\t");
+    Serial.print(scale_adc);
+    Serial.print("\tPoids:\t");
+    Serial.println(poidsf);
+
+    Serial.println("\nREADY, Taper sur une touche pour continuer\n");
+    // on attend qu'un carractere soit rentré sur le port serie pour continuer
+    while (!Serial.available()) {
+        delay(1);
+    }
+    c = Serial.read();
+    while (Serial.available() > 0) { // on fini de lire le reste et vider le buffer
+        c = Serial.read();
+    }
+    c = 0;
+    motor.writeMicroseconds(1100); // pour test si ok et du sens pendant 2 sec
+    delay(2000);
+    motor.writeMicroseconds(1000); // on stoppe
+    delay(2000);
+    Serial.println("\nEnd setup\n");
+    pwm = 1000;
+    previous_Time = millis();
+    previoustimetochange = previous_Time;
+}
+
+void loop()
+{
+    CurTime = millis();
+    elapsedTime = (CurTime - previous_Time);
+    timetochange = (CurTime - previoustimetochange);
+
+    if (timetochange > 2500) { // inc pwn toutes les 2.5 sec et on reset timetochange
+        pwm = pwm + 50;
+        previoustimetochange = millis();
+        timetochange = 0;
+    }
+
+    if (pwm > 2000) {
+        pwm = 1000;
+    }
+    if (pwm < 1000) {
+        pwm = 1000;
+    }
+    motor.writeMicroseconds(pwm);
+    scale_adc = scale.read(); // read 10Hz sampling
+
+    // adc_scale=  scale.read_average(2); // read average
+    poidsf = ((float)(scale_adc - scale_offset)) / scale_factor;
+
+    pwmpercent = map(pwm, 1000, 2000, 0, 100);
+    Serial.print(">");
+    Serial.print(elapsedTime);
+    Serial.print(",");
+    Serial.print(pwm);
+    Serial.print(",");
+    Serial.print(pwmpercent);
+    Serial.print(",");
+    Serial.print((scale_adc - scale_offset));
+    Serial.print(",");
+    Serial.println(poidsf, 3);
+}
+
+void init_esc_cal(void)
+{
+    // Servo for the ESC
+    motor.attach(MOTOR_PIN, 1000, 2000); // attatch the right motor pin
+    delay(100);
+    motor.writeMicroseconds(2000); // set to full without power connected
+
+    while (Serial.available()) { // vider le buffer
+        c = Serial.read();
+    }
+    delay(100);
+    Serial.println("Mettre la battery et attendre les bips et ensuite appuez sur une touche");
+    while (!Serial.available()) { // code will not run until keypress
+        delay(1);
+    }
+    while (Serial.available()) { // vider le buffer
+        c = Serial.read();
+    }
+
+    Serial.println(" mise a 0 et attente de 5 sec pour un autre bip");
+    motor.writeMicroseconds(1000);
+    delay(6000);
+    pwm = 1000;
+    Serial.println("Setup et calibration finis ");
+}
+
+void init_esc(void)
+{
+    // Servo for the ESC
+    motor.attach(MOTOR_PIN, 1000, 2000); // attatch the right motor pin
+    motor.writeMicroseconds(1000); // set to full without power connected
+    delay(3000);
+    pwm = 1000;
+    Serial.println("Setup ESC finis ");
+}
